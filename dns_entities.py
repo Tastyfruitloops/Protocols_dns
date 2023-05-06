@@ -54,7 +54,8 @@ class Hostname:
         return data_b
 
     @staticmethod
-    def from_bytes(data_b: bytes, out_len: OutValue = None):  # -> Hostname
+    def from_bytes(data_b: bytes, out_len: OutValue = None,
+                   total_data_b: bytes = None):  # -> Hostname
         cur_ind = 0
         splitted_name = []
         while cur_ind < len(data_b):
@@ -79,7 +80,9 @@ class Hostname:
 
         if out_len:
             out_len.set(cur_ind + 1)
-
+        if splitted_name[-1] == 'localnet':
+            splitted_name = splitted_name[:-1]
+        # print(splitted_name)
         return Hostname(splitName=splitted_name)
 
 
@@ -95,16 +98,14 @@ class Queries:
                 + self.q_class.to_bytes(2, byteorder="big"))
 
     @staticmethod
-    def from_bytes(data_b: bytes, out_len: OutValue = None):
-        print(data_b)
+    def from_bytes(data_b: bytes, out_len: OutValue = None,
+                   full_data_b: bytes = None):
         out_len_loc = OutValue()
-        hostname = Hostname.from_bytes(data_b, out_len_loc)
-        qt_index = out_len_loc.get()+2
-        print(qt_index)
-        print(data_b[qt_index-2: qt_index])
+        hostname = Hostname.from_bytes(data_b, out_len_loc, full_data_b)
+
+        qt_index = out_len_loc.get() + 2
         q_type = RType(
-            int.from_bytes(data_b[qt_index-2: qt_index], byteorder="big"))
-        print(q_type)
+            int.from_bytes(data_b[qt_index - 2: qt_index], byteorder="big"))
         if out_len:
             out_len.set(qt_index + 2)
 
@@ -176,8 +177,6 @@ r_data: \t"{r_data_s}"
 """
 
     def to_bytes(self) -> bytes:
-        print('type is')
-        print(self.r_type)
         return (self.hostname.to_bytes() +
                 self.r_type.to_bytes(2, byteorder="big") +
                 self.rd_class.to_bytes(2, byteorder="big") +
@@ -185,9 +184,10 @@ r_data: \t"{r_data_s}"
                 self.data.to_bytes())
 
     @staticmethod
-    def from_bytes(data_b: bytes, out_len: OutValue = None):
+    def from_bytes(data_b: bytes, out_len: OutValue = None,
+                   full_data: bytes = None):
         out_len_loc = OutValue()
-        hostname = Hostname.from_bytes(data_b, out_len_loc)
+        hostname = Hostname.from_bytes(data_b, out_len_loc, full_data)
         parse_ind = out_len_loc.get()
         try:
             r_type = RType(int.from_bytes(data_b[parse_ind:parse_ind + 2],
@@ -233,7 +233,7 @@ class RDTypeA(RecordData):
     def from_bytes(data_b: bytes):
         addr = [int(x) for x in data_b[2:]]
         if len(addr) != 4:
-            raise Exception("Wrond addres")
+            raise Exception("Wrong address")
         return RDTypeA(addr)
 
 
@@ -246,16 +246,16 @@ class RDTypeNS(RecordData):
         self.hostname = hostname
         self.len = len(self.hostname.to_bytes())
 
+    def form_dns_entry(self, message_bytes: bytes):
+        return self.hostname.get_name(message_bytes)
+
     def to_bytes(self) -> bytes:
-        print('to_bytes')
-        print(self.hostname.splitName)
         data_b = self.hostname.to_bytes()
         return len(data_b).to_bytes(2, byteorder="big") + data_b
 
     @staticmethod
     def from_bytes(data_b: bytes):
-        print(data_b)
-        return Hostname.from_bytes(data_b)
+        return RDTypeNS(Hostname.from_bytes(data_b))
 
 
 class DNSMessage:
@@ -264,6 +264,7 @@ class DNSMessage:
                  add_rrs: list[Record] = []):
         self.id = ID
         self.flags = flags
+        self.flags.RD = 1
         self.queries = queries
         self.answers = answers
         self.auth_rrs = auth_rrs
@@ -271,7 +272,7 @@ class DNSMessage:
 
     def __str__(self):
         return f"""ID: {str(self.id.to_bytes(2, byteorder="big"))}
-flags: {self.flags}
+flags: {self.flags.__dict__}
 queries_count: {self.queries_count}
 answers_count: {self.answers_count}
 auth_rr_count: {self.auth_rrs_count}
@@ -314,31 +315,35 @@ add_rr_count: {self.add_rrs_count}"""
         auth_rr_count = int.from_bytes(data_b[8:10], byteorder="big")
         add_rr_count = int.from_bytes(data_b[10:12], byteorder="big")
 
-        print(ID,flags,queries_count,answers_count,auth_rr_count,add_rr_count)
+        # print(ID,flags,queries_count,answers_count,auth_rr_count,add_rr_count)
         parse_ind = 12
         queries = []
+        saved_full_data = data_b[parse_ind:]
         for i in range(queries_count):
             out_len = OutValue()
-            queries.append(Queries.from_bytes(data_b[parse_ind:], out_len))
+            queries.append(Queries.from_bytes(data_b[parse_ind:], out_len,
+                                              saved_full_data))
             parse_ind += out_len.get()
 
         answers = []
         for i in range(answers_count):
             out_len = OutValue()
-            answers.append(Record.from_bytes(data_b[parse_ind:], out_len))
+            answers.append(
+                Record.from_bytes(data_b[parse_ind:], out_len, saved_full_data))
             parse_ind += out_len.get()
 
         auth_rrs = []
         for i in range(auth_rr_count):
             out_len = OutValue()
-            auth_rrs.append(Record.from_bytes(data_b[parse_ind:], out_len))
+            auth_rrs.append(
+                Record.from_bytes(data_b[parse_ind:], out_len, saved_full_data))
             parse_ind += out_len.get()
 
         add_rrs = []
         for i in range(add_rr_count):
             out_len = OutValue()
-            add_rrs.append(Record.from_bytes(data_b[parse_ind:], out_len))
+            add_rrs.append(
+                Record.from_bytes(data_b[parse_ind:], out_len, saved_full_data))
             parse_ind += out_len.get()
 
         return DNSMessage(ID, flags, queries, answers, auth_rrs, add_rrs)
-
