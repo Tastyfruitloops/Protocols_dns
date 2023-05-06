@@ -11,7 +11,10 @@ ROOT_SERVERS = ["198.41.0.4", "199.9.14.201", "192.33.4.12", "199.7.91.13",
                 "202.12.27.33", "10.10.10.1"]
 DNS_REQUEST_SOCK: socket.socket = None
 
-
+class ResolverResponse:
+    def __init__(self):
+        self.ips = None
+        self.add = None
 def ip_to_str(ip: list[int]):
     return '.'.join([str(x) for x in ip])
 
@@ -27,8 +30,7 @@ def create_dns_request(server_hostname: str, q_type: RType):
 def _get_addresses_recursive(hostname: str, q_type: RType,
                              dns_servers_ips_to_polling=ROOT_SERVERS,
                              debug_flag=False,
-                             full_dns_message: DNSMessage = None, ) -> list[
-    str]:
+                             full_dns_message: DNSMessage = None, ) -> ResolverResponse:
     for dns_server_ip in dns_servers_ips_to_polling:
         try:
             data, dns_mes = _get_data_from(hostname, q_type, dns_server_ip)
@@ -40,12 +42,28 @@ def _get_addresses_recursive(hostname: str, q_type: RType,
         if dns_mes.answers_count > 0:
             if dns_mes.answers_count == 0 and debug_flag:
                 print(f"No AA answer from {dns_server_ip}")
+
+            res = ResolverResponse()
             if q_type == RType.A:
-                return [ip_to_str(ans.data.address) for ans in dns_mes.answers
+                res.ips = [ip_to_str(ans.data.address) for ans in dns_mes.answers
                         if ans.r_type == RType.A]
+                return res
+                # return [ip_to_str(ans.data.address) for ans in dns_mes.answers
+                #         if ans.r_type == RType.A]
             if q_type == RType.NS:
-                return [ans.data.form_dns_entry(data) for ans in
+                res.ips = [ans.data.form_dns_entry(data) for ans in
                         dns_mes.answers if ans.r_type == RType.NS]
+
+                if dns_mes.add_rrs_count>0:
+                    for add in dns_mes.add_rrs:
+                        if add.r_type==RType.A:
+                            print(ip_to_str(add.data.address))
+                    res.add = [ip_to_str(add.data.address) for add in dns_mes.add_rrs if add.r_type==RType.A]
+
+                return res
+                # return [ans.data.form_dns_entry(data) for ans in
+                #         dns_mes.answers if ans.r_type == RType.NS]
+
 
         if dns_mes.auth_rrs_count == 0:
             if debug_flag:
@@ -122,10 +140,10 @@ def _get_data_from(hostname: str, q_type: RType, dns_server_ip) -> (
 
 
 def get_addresses(hostname: str, q_type: RType, full_dns_message: DNSMessage,
-                  debug_flag=False) -> list[str]:
+                  debug_flag=False) -> ResolverResponse:
     global DNS_REQUEST_SOCK
     DNS_REQUEST_SOCK = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    addresses = _get_addresses_recursive(hostname, q_type,
+    result = _get_addresses_recursive(hostname, q_type,
                                          debug_flag=debug_flag,
                                          full_dns_message=full_dns_message)
-    return addresses if addresses else []
+    return result if result.ips else None
